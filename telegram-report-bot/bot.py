@@ -4,7 +4,7 @@ import asyncio
 from datetime import datetime
 import pytz
 from dateutil import parser
-import pandas as pd
+from openpyxl import Workbook
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from telegram import Update, InputFile
@@ -103,8 +103,46 @@ async def send_manual_report_command(update: Update, context: ContextTypes.DEFAU
         await update.message.reply_text("Not allowed")
         return
     await update.message.reply_text("Preparing report")
-    await send_report_for_today(context.application)
-    await update.message.reply_text("Report sent if there were entries")
+    await 
+async def send_report_for_today(application):
+    tz = pytz.timezone(TZ)
+    today = datetime.now(tz).date().isoformat()
+    cur.execute("SELECT id, user_id, platform, url, received_at FROM links WHERE exported_date IS NULL")
+    links = cur.fetchall()
+    cur.execute("SELECT id, user_id, text, received_at FROM messages WHERE exported_date IS NULL")
+    msgs = cur.fetchall()
+    if not links and not msgs:
+        return
+    filename = f"report_{today}.xlsx"
+    wb = Workbook()
+    if links:
+        ws = wb.active
+        ws.title = "Links"
+        ws.append(["id", "user_id", "platform", "url", "received_at"])
+        for r in links:
+            ws.append([r[0], r[1], r[2], r[3], r[4]])
+    if msgs:
+        if links:
+            ws2 = wb.create_sheet("Messages")
+        else:
+            ws2 = wb.active
+            ws2.title = "Messages"
+        ws2.append(["id", "user_id", "text", "received_at"])
+        for r in msgs:
+            ws2.append([r[0], r[1], r[2], r[3]])
+    wb.save(filename)
+    if ADMIN_ID:
+        try:
+            await application.bot.send_document(ADMIN_ID, document=InputFile(filename))
+        except Exception:
+            pass
+    ids_links = [str(r[0]) for r in links]
+    ids_msgs = [str(r[0]) for r in msgs]
+    if ids_links:
+        cur.execute(f"UPDATE links SET exported_date=? WHERE id IN ({','.join(ids_links)})", (today,))
+    if ids_msgs:
+        cur.execute(f"UPDATE messages SET exported_date=? WHERE id IN ({','.join(ids_msgs)})", (today,))
+    conn.commit()
 
 def schedule_jobs(scheduler, app):
     trigger = CronTrigger(day_of_week="mon-fri", hour=REPORT_HOUR, minute=REPORT_MINUTE, timezone=TZ)
